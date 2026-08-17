@@ -1,183 +1,405 @@
-# 🏢 VerifyCo: Enterprise Company Registration & Verification Platform
+# VerifyCo — Company Registration and Verification Platform
 
-VerifyCo is a production-ready, full-stack MERN (MongoDB, Express, React, Node.js) application designed for B2B environments. It provides a secure, visually stunning portal for companies to register their business credentials, securely authenticate, and undergo automated third-party verification.
-
-Unlike a standard demo project, VerifyCo is engineered with **Enterprise SaaS aesthetics** (glassmorphism, micro-animations, Inter typography) and **robust backend architecture** (custom regex validation, abstracted services, JWT protection).
+A production-ready, full-stack MERN application for secure company registration, JWT authentication, and automated third-party business verification.
 
 ---
 
-## 🏛️ System Architecture Detailed Breakdown
+## Table of Contents
 
-This project utilizes a **Monorepo** structure, cleanly separating the client interface from the server logic while keeping them in one repository for easy deployment.
-
-### 1. The Backend (Node.js & Express REST API)
-The backend rigidly adheres to the **MVC (Model-View-Controller)** design pattern to ensure scalability and maintainability:
-
-*   **Models (`/models`)**: Defines the data layer. The `Company.js` Mongoose schema strictly enforces data integrity. It uses custom Regex to validate Indian PAN formats, enforces unique constraints (email, PAN, Reg No.), and uses a `pre('save')` hook to automatically salt and hash passwords via `bcryptjs` before they ever touch the database.
-*   **Controllers (`/controllers`)**: The brain of the API. `authController.js` handles parsing incoming requests, invoking the database models, minting JWTs, and returning standardized HTTP responses (201 Created, 400 Bad Request, etc.).
-*   **Routes (`/routes`)**: Extremely lean router files that simply map HTTP methods (GET, POST) to their respective Controller functions.
-*   **Middleware (`/middleware`)**: The `authMiddleware.js` intercepts requests to protected routes. It extracts the Bearer token from the `Authorization` header, verifies the cryptographic signature against the `JWT_SECRET`, and attaches the authenticated user object to the request lifecycle.
-*   **Services (`/services`)**: Business logic that relies on external systems (like third-party APIs) is abstracted into service files. This prevents the controllers from becoming bloated and makes swapping API providers trivial.
-
-### 2. The Frontend (React + Vite SPA)
-The frontend is a lightning-fast Single Page Application built with React and Vite.
-
-*   **Component-Driven UI (`/components/ui`)**: Built using Shadcn-inspired modular components. We rely on Vanilla CSS and Tailwind CSS (`index.css`) to define global CSS variables, injecting custom radial gradients and frosted-glass (`backdrop-blur`) effects globally.
-*   **State & Auth (`localStorage`)**: JWTs are persisted in the browser's `localStorage`. The React Router setup acts as a gatekeeper; if a token is missing, users are forcefully redirected away from the `/dashboard`.
-*   **API Layer (`/api/axios.js`)**: A centralized Axios instance is configured to automatically attach the stored JWT to the `Authorization` header of every outbound request, eliminating repetitive code.
+1. [Project Overview](#project-overview)
+2. [Architecture](#architecture)
+3. [Tech Stack](#tech-stack)
+4. [Data Flow](#data-flow)
+5. [Database Schema](#database-schema)
+6. [API Endpoints](#api-endpoints)
+7. [Verification States](#verification-states)
+8. [Local Setup](#local-setup)
+9. [Environment Variables](#environment-variables)
+10. [Third-Party Integration](#third-party-integration)
+11. [Deployment](#deployment)
 
 ---
 
-## 💻 Local Setup & Installation
+## Project Overview
 
-To run this application on your local machine, you will need two separate terminal windows—one for the backend, and one for the frontend.
+VerifyCo is a B2B platform that lets companies register their credentials, log in securely, and verify their business identity against a third-party government-style API. The results are stored in MongoDB and displayed in real time on a protected dashboard.
+
+The core user journey is:
+
+1. A company fills out the registration form with their name, PAN, registration number, and address.
+2. They receive a JWT token on successful login.
+3. From the dashboard, they trigger a verification request.
+4. The backend calls the verification service and updates the database with the result.
+5. The dashboard shows the final verification status and the raw API response.
+
+---
+
+## Architecture
+
+This project uses a Monorepo structure. Both the frontend and backend live in the same repository but run as completely independent applications.
+
+```
+Company-Registration-Verification-App/
+|
+|-- backend/                        (Express REST API — deployed on Render)
+|   |-- config/
+|   |   `-- db.js                   MongoDB Atlas connection
+|   |-- controllers/
+|   |   |-- authController.js       Register and login business logic
+|   |   `-- companyController.js    Profile fetch and verification logic
+|   |-- middleware/
+|   |   `-- authMiddleware.js       JWT verification for protected routes
+|   |-- models/
+|   |   `-- Company.js              Mongoose schema, validation, password hashing
+|   |-- routes/
+|   |   |-- authRoutes.js           /api/auth endpoints
+|   |   `-- companyRoutes.js        /api/company endpoints (protected)
+|   |-- services/
+|   |   `-- verificationService.js  Third-party API abstraction layer
+|   |-- .env.example                Template for environment variables
+|   `-- index.js                    Server entry point
+|
+|-- frontend/                       (React + Vite SPA — deployed on Vercel)
+|   `-- src/
+|       |-- api/
+|       |   `-- axios.js            Axios instance with JWT interceptors
+|       |-- components/ui/          Button, Input, Card, Label components
+|       |-- pages/
+|       |   |-- Login.jsx           Login page
+|       |   |-- Register.jsx        Registration form
+|       |   `-- Dashboard.jsx       Protected company dashboard
+|       |-- App.jsx                 Route definitions and protected route logic
+|       `-- main.jsx                React entry point
+|
+|-- postman_collection.json         Ready-to-import API test collection
+`-- README.md
+```
+
+The backend follows the **MVC (Model-View-Controller)** pattern:
+- **Model** — `Company.js` defines the data structure and database rules
+- **View** — handled entirely by the React frontend
+- **Controller** — `authController.js` and `companyController.js` contain all business logic
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Frontend | React 18 + Vite | UI framework and build tool |
+| Styling | Tailwind CSS + Custom CSS | Glassmorphism design system |
+| HTTP Client | Axios | API requests with interceptors |
+| Routing | React Router v6 | SPA navigation and protected routes |
+| Backend | Node.js + Express.js | REST API server |
+| Database | MongoDB + Mongoose | Document storage and schema validation |
+| Auth | JWT + bcryptjs | Stateless authentication and password hashing |
+| DB Host | MongoDB Atlas | Cloud-hosted database |
+| Backend Host | Render.com | Backend deployment |
+| Frontend Host | Vercel | Frontend deployment |
+
+---
+
+## Data Flow
+
+### Login Flow
+
+```
+  React (Vercel)              Express (Render)             MongoDB Atlas
+       |                            |                             |
+       |  POST /api/auth/login      |                             |
+       |  { email, password }       |                             |
+       |--------------------------->|                             |
+       |                            |  Company.findOne({email})   |
+       |                            |---------------------------->|
+       |                            |                             |
+       |                            |  Returns user document      |
+       |                            |<----------------------------|
+       |                            |                             |
+       |                            |  bcrypt.compare(password)   |
+       |                            |  Match confirmed            |
+       |                            |  jwt.sign({ userId })       |
+       |                            |                             |
+       |  200 OK { name, token }    |                             |
+       |<---------------------------|                             |
+       |                            |                             |
+       |  Token saved to            |                             |
+       |  localStorage              |                             |
+       |  Redirect to /dashboard    |                             |
+       |                            |                             |
+```
+
+### Protected Route Flow
+
+```
+  React              Axios Interceptor        authMiddleware          MongoDB
+    |                      |                       |                    |
+    |  Request /profile    |                       |                    |
+    |--------------------->|                       |                    |
+    |                      |                       |                    |
+    |                      |  Reads token from     |                    |
+    |                      |  localStorage,        |                    |
+    |                      |  adds to header:      |                    |
+    |                      |  Authorization:       |                    |
+    |                      |  Bearer eyJhb...      |                    |
+    |                      |---------------------->|                    |
+    |                      |                       |                    |
+    |                      |                       |  jwt.verify(token) |
+    |                      |                       |  Valid             |
+    |                      |                       |                    |
+    |                      |                       |  findById(id)      |
+    |                      |                       |------------------->|
+    |                      |                       |                    |
+    |                      |                       |  User data         |
+    |                      |                       |<-------------------|
+    |                      |                       |                    |
+    |  Company profile     |<----------------------|                    |
+    |<---------------------|                       |                    |
+    |                      |                       |                    |
+    |  Renders dashboard   |                       |                    |
+    |                      |                       |                    |
+```
+
+---
+
+## Database Schema
+
+```
+companies (Collection)
+---------------------------------------------------------
+Field                | Type          | Rules
+---------------------------------------------------------
+_id                  | ObjectId      | Auto-generated
+name                 | String        | Required
+registrationNumber   | String        | Required, Unique
+pan                  | String        | Unique, Regex validated
+email                | String        | Unique
+phoneNumber          | String        | Required
+address              | String        | Required
+password             | String        | Bcrypt hashed pre-save
+verificationStatus   | String (enum) | Pending / Verified / Rejected
+verificationResult   | Object        | Raw API response payload
+verificationDate     | Date          | Timestamp of verification
+createdAt            | Date          | Auto-managed by Mongoose
+updatedAt            | Date          | Auto-managed by Mongoose
+---------------------------------------------------------
+```
+
+The `pan` field is validated against the Indian PAN format using a Regex pattern that enforces exactly 5 uppercase letters, 4 digits, and 1 uppercase letter (e.g., `ABCDE1234F`).
+
+---
+
+## API Endpoints
+
+### Auth Routes — `/api/auth` (public)
+
+| Method | Endpoint | Body | Response |
+|--------|----------|------|----------|
+| POST | `/api/auth/register` | `{ name, email, password, registrationNumber, pan, phoneNumber, address }` | `{ _id, name, email, token }` |
+| POST | `/api/auth/login` | `{ email, password }` | `{ _id, name, email, token }` |
+
+### Company Routes — `/api/company` (requires JWT token)
+
+| Method | Endpoint | Headers | Response |
+|--------|----------|---------|----------|
+| GET | `/api/company/profile` | `Authorization: Bearer <token>` | Full company profile object |
+| POST | `/api/company/verify` | `Authorization: Bearer <token>` | Verification result and updated status |
+
+To use protected endpoints, copy the `token` from the login response and set the request header as:
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+---
+
+## Verification States
+
+The verification system produces one of four outcomes depending on the company's registration number.
+
+```
+  [ PENDING ]  <-- Default state after registration
+       |
+       | User clicks "Verify Company"
+       |
+  [ verificationService.js runs ]
+       |
+       |
+  -----+---------------------------+-----------------+
+  |                                |                 |
+  v                                v                 v
+[ VERIFIED ]               [ REJECTED ]        [ ERROR ]
+  Success                    PAN or RegNo       API Timeout
+  JSON payload returned      starts with INV    or crash
+```
+
+To test each state, use these registration numbers when creating a test account:
+
+| State | Registration Number | What happens |
+|-------|--------------------|----|
+| Verified | Any normal value, e.g. `REG12345` | Returns a verified JSON payload |
+| Rejected | Starts with `INV`, e.g. `INV99999` | Company not found in records |
+| Timeout Error | Exactly `TIMEOUT123` | Simulates third-party API timing out |
+| Server Error | Exactly `FAIL123` | Simulates third-party API returning 500 |
+
+---
+
+## Local Setup
 
 ### Prerequisites
-*   Node.js (v18 or higher)
-*   MongoDB (Either a local installation like MongoDB Compass, or a cloud MongoDB Atlas URI)
-*   Git
+- Node.js v18 or higher
+- Git
 
-### 1. Clone the Repository
+### 1. Clone the repository
+
 ```bash
 git clone https://github.com/rachit1234567547/Company-Registration-Verification-App.git
 cd Company-Registration-Verification-App
 ```
 
-### 2. Initialize the Backend
-Open your first terminal window and navigate to the backend folder:
+### 2. Start the backend
+
 ```bash
 cd backend
 npm install
 ```
-Next, create a `.env` file inside the `backend` folder (see the Environment Variables section below). Once the `.env` is created, start the server:
+
+Create a `.env` file inside the `backend/` folder (see Environment Variables below), then run:
+
 ```bash
 npm run dev
 ```
-*Expected Output:* `Server running on port 5001` and `MongoDB Connected`.
 
-### 3. Initialize the Frontend
-Open a **second** terminal window and navigate to the frontend folder:
+Expected output:
+```
+Server running on port 5001
+MongoDB Connected: ac-xxxxx.mongodb.net
+```
+
+### 3. Start the frontend
+
+Open a second terminal window:
+
 ```bash
 cd frontend
 npm install
-```
-Start the React development server:
-```bash
 npm run dev
 ```
-*Expected Output:* The terminal will provide a local link, usually `http://localhost:5173`. Open this in your browser to view the app!
+
+Open `http://localhost:5173` in your browser.
 
 ---
 
-## 🔐 Environment Variables
+## Environment Variables
 
-The backend relies on secure environment variables to function. Create a file named exactly `.env` inside the `/backend` folder and add the following keys:
+Create a file named `.env` inside the `backend/` directory. Never commit this file to GitHub — it is already listed in `.gitignore`. An `.env.example` file is included in the repository as a reference template.
 
 ```env
-# The port your Node.js server will run on locally
+# Port the server runs on
 PORT=5001
 
-# The connection string to your MongoDB Database. 
-# For local dev: mongodb://localhost:27017/company_verification
-# For production: mongodb+srv://<username>:<password>@cluster0...
-MONGO_URI=mongodb://localhost:27017/company_verification
+# MongoDB Atlas connection string
+MONGO_URI=mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/company_verification
 
-# The cryptographic key used to sign and verify JSON Web Tokens.
-# Make this a long, random string in production.
-JWT_SECRET=super_secret_jwt_key_development
+# Secret key used to sign and verify JWT tokens
+JWT_SECRET=replace_this_with_a_long_random_string
 
-# API Key for the future third-party verification provider
-THIRD_PARTY_API_KEY=dummy_api_key_for_future_integration
+# Placeholder for future third-party verification API key
+THIRD_PARTY_API_KEY=your_api_key_here
 ```
 
 ---
 
-## 🔌 API Endpoints Documentation
+## Third-Party Integration
 
-The backend exposes a RESTful API. All responses are returned in `application/json` format.
+The verification logic is isolated in `backend/services/verificationService.js`. This is intentional — by keeping it in a service file, swapping from a mock to a real API only requires changing that one file. The controllers, routes, and frontend remain untouched.
 
-### 1. Authentication Endpoints (Public)
+### Current implementation: Mock service
 
-**Register a Company**
-*   **URL:** `POST /api/auth/register`
-*   **Payload:** `{ "name", "registrationNumber", "pan", "email", "phoneNumber", "address", "password" }`
-*   **Success Response (201):** Returns a JWT token and the sanitized user object.
+The mock service simulates what a real government verification API would do:
 
-**Login**
-*   **URL:** `POST /api/auth/login`
-*   **Payload:** `{ "email", "password" }`
-*   **Success Response (200):** Returns a JWT token and the sanitized user object.
+```
+Request
+  |
+  +--> Random delay (1-3 seconds) to simulate network latency
+  |
+  +--> Check for edge-case trigger codes (TIMEOUT123, FAIL123, INV...)
+  |
+  +--> Return verified JSON payload OR reject with an error
+```
 
-### 2. Company Endpoints (Protected 🛡️)
-*Requires Header: `Authorization: Bearer <your_jwt_token>`*
+### Switching to a real API
 
-**Get Company Profile**
-*   **URL:** `GET /api/company/profile`
-*   **Description:** Uses the JWT payload to look up the user in the database and return their profile data (excluding the password).
-
-**Trigger Verification**
-*   **URL:** `POST /api/company/verify`
-*   **Description:** Tells the backend to invoke the third-party verification service.
-*   **Success Response (200):** Updates the database status to `Verified` or `Rejected` and returns the result payload.
-
----
-
-## 🔄 Third-Party API Integration (Verification Service)
-
-A core requirement of this application is verifying company credentials against a third-party API (e.g., a government database or corporate registry).
-
-Because real verification APIs charge money per request, this application currently implements an **Intelligent Mock Service** located in `backend/services/verificationService.js`.
-
-### How the Mock Service Works
-When the frontend requests a verification, the mock service intercepts the request and simulates a real-world network environment:
-1.  **Network Latency**: It artificially delays the response by 1 to 3 seconds to simulate a real HTTP request.
-2.  **Success Logic**: If the PAN and Registration Number are properly formatted, it returns a `Verified` status along with a fake JSON payload of "official" company data.
-3.  **Failure Logic**: If you register a company with a Registration Number starting with `INV`, the service will reject it, simulating a "Not Found in Government Database" scenario.
-4.  **Edge Cases**: If you use `TIMEOUT123` or `FAIL123`, the service mimics catastrophic third-party API failures (HTTP 503 and 500) so you can test the frontend's error handling.
-
-### How to Upgrade to a Real API
-Because the logic is abstracted into a Service file, upgrading to a real API is trivial. You do not need to touch the Controllers or Routes. 
-Simply open `verificationService.js` and replace the `setTimeout` block with an Axios call:
+Replace the `setTimeout` block inside `verificationService.js` with an actual HTTP call:
 
 ```javascript
-// Example of replacing the mock with a real provider (e.g., Stripe Identity or MCA API)
-const response = await axios.post('https://api.real-provider.com/verify', {
+const response = await axios.post('https://api.provider.com/v1/verify', {
     pan: company.pan,
-    regNumber: company.registrationNumber
+    registrationNumber: company.registrationNumber
 }, {
-    headers: { 'Authorization': `Bearer ${process.env.THIRD_PARTY_API_KEY}` }
+    headers: {
+        'Authorization': `Bearer ${process.env.THIRD_PARTY_API_KEY}`
+    },
+    timeout: 10000
 });
+
+return { success: true, details: response.data };
 ```
 
 ---
 
-## 🚀 Production Deployment Guide
+## Deployment
 
-Deploying this Monorepo requires three distinct steps: hosting the database, the backend, and the frontend.
+### Production setup
 
-### Step 1: Database Deployment (MongoDB Atlas)
-1. Sign up for a free tier account at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas).
-2. Create a new "M0 Free" cluster.
-3. Under Network Access, whitelist all IPs (`0.0.0.0/0`) so your backend can reach it from the cloud.
-4. Under Database Access, create a user and copy the auto-generated password.
-5. Click "Connect" -> "Drivers" to get your Connection String.
+```
+  Vercel                            Render                    MongoDB Atlas
+  (React/Vite SPA)  ------------>  (Node/Express API) ----->  (Cloud Database)
+  frontend/             HTTPS      backend/             Mongoose
+```
 
-### Step 2: Backend Deployment (Render.com)
-1. Push your entire codebase to a public or private GitHub repository.
-2. Log into [Render.com](https://render.com) and click **New Web Service**.
-3. Connect your GitHub repository.
-4. **CRITICAL SETTINGS:**
-   *   **Root Directory:** `backend` *(This tells Render to ignore the frontend folder)*
-   *   **Build Command:** `npm install`
-   *   **Start Command:** `npm start`
-5. Under Environment Variables, add your `MONGO_URI` (from Atlas), `JWT_SECRET`, and `PORT` (Render defaults to 10000).
-6. Click Deploy. Once finished, Render will give you a live URL (e.g., `https://verifyco-backend.onrender.com`).
+### Step 1 — Database (MongoDB Atlas)
 
-### Step 3: Frontend Deployment (Vercel.com)
-1. Log into [Vercel](https://vercel.com) and click **Add New Project**.
-2. Connect your GitHub repository.
-3. **CRITICAL SETTINGS:**
-   *   **Root Directory:** `frontend` *(This tells Vercel to ignore the backend folder)*
-   *   **Framework Preset:** `Vite`
-4. Under Environment Variables, you must add `VITE_API_URL` and set its value to your live Render backend URL, appending `/api` at the end (e.g., `https://verifyco-backend.onrender.com/api`).
-5. Click Deploy. Vercel will build your React app and provide you with a live, shareable URL!
+1. Sign up at [cloud.mongodb.com](https://cloud.mongodb.com)
+2. Create a free M0 cluster
+3. Under Network Access, add IP address `0.0.0.0/0` to allow connections from Render
+4. Under Database Access, create a database user with a secure password
+5. Click Connect → Drivers and copy the connection string
+
+### Step 2 — Backend (Render.com)
+
+1. Go to [render.com](https://render.com) and create a new Web Service
+2. Connect your GitHub repository
+3. Use these settings:
+
+| Setting | Value |
+|---------|-------|
+| Root Directory | `backend` |
+| Build Command | `npm install` |
+| Start Command | `npm start` |
+
+4. Add the environment variables: `MONGO_URI`, `JWT_SECRET`, `PORT`, `THIRD_PARTY_API_KEY`
+5. Deploy and copy the live URL (e.g. `https://verifyco-api.onrender.com`)
+
+### Step 3 — Frontend (Vercel)
+
+1. Go to [vercel.com](https://vercel.com) and create a new project
+2. Connect the same GitHub repository
+3. Use these settings:
+
+| Setting | Value |
+|---------|-------|
+| Root Directory | `frontend` |
+| Framework Preset | Vite (auto-detected) |
+| Build Command | `npm run build` |
+| Output Directory | `dist` |
+
+4. Add this environment variable:
+
+| Key | Value |
+|-----|-------|
+| `VITE_API_URL` | `https://your-render-url.onrender.com/api` |
+
+5. Deploy and share the generated URL
+
+---
+
+*Built as a full-stack SaaS assessment project using the MERN stack.*
